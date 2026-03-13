@@ -1,11 +1,6 @@
 # Unity package repository ignore rules
 # Keep all .meta files tracked so GUIDs remain stable.
 
-# Root-level documentation/package descriptor metas are safe to regenerate.
-/README.md.meta
-/CHANGELOG.md.meta
-/package.json.meta
-
 .vs/
 .idea/
 .vscode/
