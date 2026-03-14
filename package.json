@@ -1,7 +1,7 @@
 {
   "name": "com.jlz.project-view-enhancer",
   "displayName": "JLZ Project View Enhancer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "unity": "2022.3",
   "description": "Editor-only enhancements for Unity's Project window, including folder styling, guide lines, alternating rows, and two-column folder icon overlays.",
   "keywords": [

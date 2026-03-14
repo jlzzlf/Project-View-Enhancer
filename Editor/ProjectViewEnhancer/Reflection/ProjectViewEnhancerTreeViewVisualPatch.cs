@@ -202,23 +202,23 @@ namespace JLZ.Editor.ProjectViewEnhancer
             s_treeViewGUIType?.GetMethod("set_lineStyle", InstanceBindingFlags);
 
         private static readonly PropertyInfo s_iconLeftPaddingProperty =
-            s_treeViewGUIType?.GetProperty("iconLeftPadding", InstanceBindingFlags);
+            GetCompatibleProperty(s_treeViewGUIType, "iconLeftPadding", InstanceBindingFlags);
         private static readonly PropertyInfo s_iconTotalPaddingProperty =
-            s_treeViewGUIType?.GetProperty("iconTotalPadding", InstanceBindingFlags);
+            GetCompatibleProperty(s_treeViewGUIType, "iconTotalPadding", InstanceBindingFlags);
         private static readonly PropertyInfo s_extraSpaceBeforeIconAndLabelProperty =
-            s_treeViewGUIType?.GetProperty("extraSpaceBeforeIconAndLabel", InstanceBindingFlags);
+            GetCompatibleProperty(s_treeViewGUIType, "extraSpaceBeforeIconAndLabel", InstanceBindingFlags);
         private static readonly PropertyInfo s_iconOverlayGuiProperty =
-            s_treeViewGUIType?.GetProperty("iconOverlayGUI", InstanceBindingFlags);
+            GetCompatibleProperty(s_treeViewGUIType, "iconOverlayGUI", InstanceBindingFlags, IsOverlayGuiProperty);
         private static readonly PropertyInfo s_labelOverlayGuiProperty =
-            s_treeViewGUIType?.GetProperty("labelOverlayGUI", InstanceBindingFlags);
+            GetCompatibleProperty(s_treeViewGUIType, "labelOverlayGUI", InstanceBindingFlags, IsOverlayGuiProperty);
         private static readonly PropertyInfo s_hoveredItemProperty =
-            s_treeViewControllerType?.GetProperty("hoveredItem", InstanceBindingFlags);
+            GetCompatibleProperty(s_treeViewControllerType, "hoveredItem", InstanceBindingFlags);
         private static readonly PropertyInfo s_treeStateProperty =
-            s_treeViewControllerType?.GetProperty("state", InstanceBindingFlags);
+            GetCompatibleProperty(s_treeViewControllerType, "state", InstanceBindingFlags);
         private static readonly PropertyInfo s_treeVisibleRectProperty =
-            s_treeViewControllerType?.GetProperty("visibleRect", InstanceBindingFlags);
+            GetCompatibleProperty(s_treeViewControllerType, "visibleRect", InstanceBindingFlags);
         private static readonly PropertyInfo s_treeDataProperty =
-            s_treeViewControllerType?.GetProperty("data", InstanceBindingFlags);
+            GetCompatibleProperty(s_treeViewControllerType, "data", InstanceBindingFlags);
 
         private static readonly FieldInfo s_treeViewField =
             s_treeViewGUIType?.GetField("m_TreeView", InstanceBindingFlags);
@@ -259,7 +259,7 @@ namespace JLZ.Editor.ProjectViewEnhancer
             s_treeViewStateType?.GetField("scrollPos", InstanceBindingFlags);
         private static readonly Type s_treeViewDataSourceType = Type.GetType("UnityEditor.IMGUI.Controls.ITreeViewDataSource, UnityEditor");
         private static readonly PropertyInfo s_treeDataSourceRowCountProperty =
-            s_treeViewDataSourceType?.GetProperty("rowCount", InstanceBindingFlags);
+            GetCompatibleProperty(s_treeViewDataSourceType, "rowCount", InstanceBindingFlags);
         private static readonly MethodInfo s_treeDataSourceGetRowsMethod =
             s_treeViewDataSourceType?.GetMethod("GetRows", InstanceBindingFlags, null, Type.EmptyTypes, null);
         private static readonly MethodInfo s_getMaxWidthMethod =
@@ -269,6 +269,147 @@ namespace JLZ.Editor.ProjectViewEnhancer
         private static readonly Dictionary<object, TreeScaleCacheEntry> s_treeScaleCache = new();
 
         private static bool s_loggedRuntimeFailure;
+
+        private static PropertyInfo GetCompatibleProperty(Type type, string name, BindingFlags bindingFlags, Predicate<PropertyInfo> predicate = null)
+        {
+            if (type == null || string.IsNullOrEmpty(name))
+                return null;
+
+            PropertyInfo property = FindDeclaredCompatibleProperty(type, name, bindingFlags, predicate);
+            if (property != null)
+                return property;
+
+            if (!type.IsInterface)
+                return null;
+
+            Type[] interfaces = type.GetInterfaces();
+            for (int i = 0; i < interfaces.Length; i++)
+            {
+                property = FindDeclaredCompatibleProperty(interfaces[i], name, bindingFlags, predicate);
+                if (property != null)
+                    return property;
+            }
+
+            return null;
+        }
+
+        private static PropertyInfo FindDeclaredCompatibleProperty(Type type, string name, BindingFlags bindingFlags, Predicate<PropertyInfo> predicate)
+        {
+            BindingFlags declaredBindingFlags = bindingFlags | BindingFlags.DeclaredOnly;
+            for (Type currentType = type; currentType != null; currentType = currentType.BaseType)
+            {
+                PropertyInfo[] properties = currentType.GetProperties(declaredBindingFlags);
+                for (int i = 0; i < properties.Length; i++)
+                {
+                    PropertyInfo property = properties[i];
+                    if (!string.Equals(property.Name, name, StringComparison.Ordinal))
+                        continue;
+
+                    if (property.GetIndexParameters().Length != 0)
+                        continue;
+
+                    if (predicate != null && !predicate(property))
+                        continue;
+
+                    return property;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsOverlayGuiProperty(PropertyInfo property)
+        {
+            return property != null
+                && typeof(Delegate).IsAssignableFrom(property.PropertyType)
+                && HasDelegateSignature(property.PropertyType, typeof(void), typeof(TreeViewItem), typeof(Rect));
+        }
+
+        private static bool HasDelegateSignature(Type delegateType, Type returnType, params Type[] parameterTypes)
+        {
+            MethodInfo invokeMethod = delegateType?.GetMethod("Invoke", InstanceBindingFlags);
+            if (invokeMethod == null || invokeMethod.ReturnType != returnType)
+                return false;
+
+            ParameterInfo[] parameters = invokeMethod.GetParameters();
+            if (parameters.Length != parameterTypes.Length)
+                return false;
+
+            for (int i = 0; i < parameterTypes.Length; i++)
+            {
+                if (parameters[i].ParameterType != parameterTypes[i])
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryInvokeOverlayGui(PropertyInfo property, object instance, TreeViewItem item, Rect rect)
+        {
+            if (property == null || instance == null)
+                return false;
+
+            if (property.GetValue(instance, null) is not Delegate overlayDelegate)
+                return false;
+
+            if (!TryCreateOverlayAction(overlayDelegate, out Action<TreeViewItem, Rect> overlayAction))
+                return false;
+
+            overlayAction.Invoke(item, rect);
+            return true;
+        }
+
+        private static bool TryCreateOverlayAction(Delegate sourceDelegate, out Action<TreeViewItem, Rect> action)
+        {
+            action = null;
+            if (sourceDelegate == null)
+                return false;
+
+            if (sourceDelegate is Action<TreeViewItem, Rect> typedAction)
+            {
+                action = typedAction;
+                return true;
+            }
+
+            Delegate[] invocationList = sourceDelegate.GetInvocationList();
+            Action<TreeViewItem, Rect> combinedAction = null;
+            for (int i = 0; i < invocationList.Length; i++)
+            {
+                if (!TryCreateSingleOverlayAction(invocationList[i], out Action<TreeViewItem, Rect> invocationAction))
+                    return false;
+
+                combinedAction += invocationAction;
+            }
+
+            action = combinedAction;
+            return action != null;
+        }
+
+        private static bool TryCreateSingleOverlayAction(Delegate sourceDelegate, out Action<TreeViewItem, Rect> action)
+        {
+            action = null;
+            if (sourceDelegate == null || !HasDelegateSignature(sourceDelegate.GetType(), typeof(void), typeof(TreeViewItem), typeof(Rect)))
+                return false;
+
+            if (sourceDelegate is Action<TreeViewItem, Rect> typedAction)
+            {
+                action = typedAction;
+                return true;
+            }
+
+            try
+            {
+                action = sourceDelegate.Target == null
+                    ? (Action<TreeViewItem, Rect>)Delegate.CreateDelegate(typeof(Action<TreeViewItem, Rect>), sourceDelegate.Method, false)
+                    : (Action<TreeViewItem, Rect>)Delegate.CreateDelegate(typeof(Action<TreeViewItem, Rect>), sourceDelegate.Target, sourceDelegate.Method, false);
+            }
+            catch (ArgumentException)
+            {
+                action = null;
+            }
+
+            return action != null;
+        }
 
         public bool IsInstalled { get; private set; }
 
@@ -920,20 +1061,16 @@ namespace JLZ.Editor.ProjectViewEnhancer
                 GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit, true, 0f, iconTint, 0f, 0f);
             }
 
-            if (s_iconOverlayGuiProperty.GetValue(instance, null) is Action<TreeViewItem, Rect> iconOverlayGui)
-            {
-                Rect overlayRect = labelRect;
-                overlayRect.width = iconDrawSize + iconTotalPadding;
-                iconOverlayGui.Invoke(item, overlayRect);
-            }
+            Rect overlayRect = labelRect;
+            overlayRect.width = iconDrawSize + iconTotalPadding;
+            TryInvokeOverlayGui(s_iconOverlayGuiProperty, instance, item, overlayRect);
 
             if (icon != null)
                 labelRect.xMin += iconDrawSize + iconTotalPadding + spaceBetweenIconAndText;
 
             styleToUse.Draw(labelRect, label, false, false, selected, focused);
 
-            if (s_labelOverlayGuiProperty.GetValue(instance, null) is Action<TreeViewItem, Rect> labelOverlayGui)
-                labelOverlayGui.Invoke(item, labelRect);
+            TryInvokeOverlayGui(s_labelOverlayGuiProperty, instance, item, labelRect);
 
             DrawTreeGuides(context);
         }
